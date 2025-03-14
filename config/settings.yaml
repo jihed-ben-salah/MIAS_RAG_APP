@@ -1,1 +1,10 @@
 # Configuration file
+
+
+# config/database.yaml
+database:
+  name: text_db
+  user: your_username
+  password: Jiji@jiji123
+  host: localhost
+  port: 5432
