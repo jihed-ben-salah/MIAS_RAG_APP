@@ -1,1 +1,4 @@
 /data
+/qdrant_storage
+/.env
+src/notebooks/phidata.ipynb

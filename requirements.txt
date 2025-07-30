@@ -1,0 +1,13 @@
+langchain
+pypdf
+sentence-transformers
+chromadb
+pdfplumber
+langgraph
+langgraph
+langchain
+langsmith
+python-dotenv
+langchain-groq 
+langchain_tavily
+qdrant_client
