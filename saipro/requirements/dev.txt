@@ -1,0 +1,7 @@
+-r base.txt
+black
+ruff
+mypy
+pytest
+ipython
+jupyter

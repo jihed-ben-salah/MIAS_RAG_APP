@@ -1,0 +1,478 @@
+% Thesis template for the RAG multimodal project
+\documentclass[12pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+\pagestyle{fancy}
+\fancyhead{}
+\fancyfoot{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[LO]{Système d'assistance médical RAG multimodal}
+\fancyhead[RE]{Mémoire M2 - École Centrale de Lille}
+
+\begin{document}
+
+% Title page
+\begin{titlepage}
+  \centering
+  {\LARGE École Centrale de Lille \par}
+  \vspace{1.5cm}
+  {\Huge \textbf{Système d'assistance médical RAG multimodal} \par}
+  \vspace{1.0cm}
+  {\Large Mémoire de Master 2 \par}
+  \vspace{1.0cm}
+  {\Large Auteur : [Ton Nom] \par}
+  {\Large Encadrant académique : \textbf{Intissar Bouhrai} \par}
+  {\Large Entreprise d'accueil : \textbf{Opmobility} \par}
+  \vfill
+  {\large Année : 2025 \par}
+\end{titlepage}
+
+% Résumé
+\begin{abstract}
+Ce travail présente la conception, l'implémentation et l'évaluation d'un système d'assistance médicale fondé sur Retrieval‑Augmented Generation (RAG) et capable de traiter des informations textuelles et visuelles. Le pipeline comprend : (1) la préparation et le découpage du corpus source en fragments (chunks), (2) la génération d'embeddings à l'aide de Sentence‑Transformers, (3) le stockage et la recherche vectorielle via Qdrant, (4) un reranker Cross‑Encoder pour améliorer la précision des extraits récupérés, et (5) un agent orchestré par LangGraph qui combine appels d'outils (vision multimodale, décomposition de requêtes, retriever et reranker) et génération par un LLM (ChatGroq / Llama3). Le système est conteneurisé avec Docker pour faciliter le déploiement et la reproductibilité. Nous présentons les choix techniques, le protocole d'évaluation basé sur des métriques de retrieval (recall@k, MRR) et une évaluation qualitative des réponses multimodales. Enfin, nous discutons des limites (hallucinations, contraintes éthiques liées à l'utilisation médicale) et proposons des pistes d'amélioration.
+\end{abstract}
+
+% Remerciements (un-numbered chapter but in TOC)
+\chapter*{Remerciements}
+\addcontentsline{toc}{chapter}{Remerciements}
+Je tiens à exprimer ma profonde gratitude à toutes les personnes qui m'ont soutenu et accompagné tout au long de la réalisation de ce projet de mémoire de M2 à l'École Centrale de Lille.
+
+Je remercie tout d'abord mon encadrante académique, \textbf{Intissar Bouhrai}, pour sa disponibilité, ses conseils précieux et son accompagnement constant durant ce travail. Son encadrement a grandement contribué à la qualité de ce mémoire.
+
+Je remercie également l'entreprise \textbf{Opmobility} pour l'accueil, les ressources et le soutien apportés tout au long du projet. Je suis reconnaissant envers les membres de l'équipe d'Opmobility qui ont contribué par leurs retours et leur aide pratique à la mise en œuvre des aspects techniques.
+
+Ma reconnaissance va aussi à ma famille pour son soutien indéfectible et ses encouragements pendant ces années d'études, ainsi qu'à tous les collègues et amis qui m'ont aidé ponctuellement — que ce soit pour des conseils techniques sur les notebooks, l'infrastructure Qdrant ou la conteneurisation Docker, ou simplement par leur soutien moral.
+
+Merci à toutes et à tous pour votre contribution à la réussite de ce projet.
+
+% Table of contents
+\tableofcontents
+\clearpage
+
+% Chapters
+\chapter{Introduction}
+\label{chap:introduction}
+
+\section{Contexte général et motivation}
+L'essor des modèles de langage et des modèles vision–langage a profondément transformé les capacités de traitement automatique de l'information. Dans de nombreux domaines, en particulier les domaines sensibles comme la santé ou l'automobile, les utilisateurs exigent aujourd'hui des systèmes capables non seulement de produire des réponses informatives, mais aussi de justifier leurs sources et de manipuler des données multimodales (texte, images, etc.).
+
+Parallèlement, la croissance exponentielle des données non structurées rend les approches purement symboliques ou basées sur des index lexicaux insuffisantes. Les architectures RAG (Retrieval‑Augmented Generation) proposent une alternative pragmatique : elles conjuguent la recherche sémantique via embeddings et index vectoriels avec la puissance générative des LLM, améliorant ainsi la précision, la traçabilité et la contextualisation des réponses.
+
+Ce mémoire s'inscrit dans ce mouvement technologique et industriel : il vise à concevoir une chaîne RAG multimodale capable de répondre à des requêtes complexes en s'appuyant explicitement sur des extraits sourcés issus d'un corpus mixte (documents textuels et images annotées). L'objectif est de fournir un système reproductible, évaluable et déployable en environnement industriel.
+
+\section{Définition précise de la problématique}
+Le problème central adressé est le suivant : comment concevoir et mettre en œuvre une chaîne RAG multimodale qui, pour une requête donnée, restitue des réponses à la fois pertinentes, sourcées et traçables, tout en limitant les risques d'hallucination et en restant opérable dans un contexte industriel ?
+
+Les défis techniques associés sont :
+\begin{itemize}
+  \item la représentation et l'indexation conjointe d'informations textuelles et visuelles ;
+  \item la récupération efficace d'extraits pertinents dans des corpus volumineux (scalabilité et latence) ;
+  \item la réévaluation (reranking) des premiers résultats pour réduire le bruit et améliorer la précision ;
+  \item l'orchestration agentique permettant d'appeler des outils (analyse d'image, décomposition de requête, retriever, reranker) avant la génération finale par le LLM ;
+  \item la traçabilité et la justification des réponses pour des usages sensibles (exigences réglementaires et éthiques).
+\end{itemize}
+
+Concrètement, nous devons définir des protocoles d'ingestion (chunking, métadonnées), choisir des modèles d'embeddings et de reranking adaptés, et concevoir un agent qui combine retrieval et génération tout en exposant les sources utilisées.
+
+\section{Questions de recherche et objectifs}
+Les questions de recherche qui structurent ce travail sont :
+\begin{enumerate}
+  \item Dans quelle mesure l'intégration d'un reranker améliore‑t‑elle la précision et la fiabilité des réponses d'un pipeline RAG multimodal ?
+  \item Quelles sont les bonnes pratiques d'ingestion et de chunking pour préserver le contexte tout en restant économes en calcul pour des documents multimodaux ?
+  \item Comment mesurer et atténuer les hallucinations d'un LLM lorsque la génération s'appuie sur des extraits récupérés ?
+  \item Quelle architecture agentique (séquence d'appels d'outils) permet un compromis optimal entre qualité des réponses et coût de calcul ?
+\end{enumerate}
+
+Les objectifs opérationnels découlant de ces questions sont :
+\begin{itemize}
+  \item implémenter un pipeline complet d'ingestion, d'embedding et d'indexation (Qdrant) pour données textuelles et visuelles ;
+  \item intégrer un reranker (Cross‑Encoder) et mesurer son impact sur les métriques de retrieval (recall@k, MRR) et sur la qualité finale des réponses ;
+  \item concevoir un agent orchestré (LangGraph) capable d'exploiter des outils multimodaux et de produire des réponses sourcées ;
+  \item fournir un protocole expérimental reproductible et une procédure de déploiement (conteneurisation Docker, orchestration docker‑compose).
+\end{itemize}
+
+\section{Contributions du mémoire}
+Ce mémoire propose les contributions suivantes :
+\begin{itemize}
+  \item une implémentation reproductible d'une chaîne RAG multimodale (texte + images) et son intégration avec Qdrant pour l'indexation persistante ;
+  \item une étude empirique sur l'effet du reranking et des choix d'embeddings sur les performances de retrieval et la qualité des réponses ;
+  \item des recommandations pratiques pour l'ingestion multimodale (paramètres de chunking, schéma de métadonnées) favorisant la traçabilité ;
+  \item un exemple d'agent orchestral (LangGraph) documenté, illustrant la manière de combiner outils de vision, retrieval et reranking avant la génération par LLM.
+\end{itemize}
+
+\section{Organisation du document}
+Le mémoire est organisé comme suit :
+\begin{itemize}
+  \item Chapitre 1 : Introduction — contexte, problématique, objectifs et contributions (présent) ;
+  \item Chapitre 2 : État de l'art — revue des techniques RAG, indexation vectorielle, reranking et agents multimodaux ;
+  \item Chapitre 3 : Données et préparation — description du corpus, nettoyage, chunking et stratégie d'annotation multimodale ;
+  \item Chapitre 4 : Architecture et implémentation — composants du pipeline, choix d'API et intégration (Qdrant, Sentence‑Transformers, Cross‑Encoder, LangGraph) ;
+  \item Chapitre 5 : Expérimentations et évaluation — protocole expérimental, métriques (recall@k, MRR, évaluation humaine) et résultats ;
+  \item Chapitre 6 : Déploiement et MLOps — conteneurisation, gestion des modèles et bonnes pratiques pour la reproductibilité ;
+  \item Chapitre 7 : Discussion et perspectives — limites, risques éthiques et pistes futures.
+\end{itemize}
+
+Ce chapitre introductif établit le cadre conceptuel et technique pour la suite du mémoire. Les chapitres suivants détailleront le travail réalisé pour chaque étape du pipeline, depuis l'ingestion des données jusqu'à l'évaluation et au déploiement.
+
+\chapter{Background Study}
+\clearpage
+
+\section*{Introduction}
+
+In this chapter, we establish the foundation for the machine learning project focused on the analysis and generation of critical driving scenarios in autonomous driving. We begin by providing an overview of the rising importance of autonomous driving technologies in the automotive industry, especially as the industry pushes towards safer, more efficient, and intelligent driving systems. The ability of autonomous vehicles to accurately interpret and respond to a variety of complex driving scenarios, particularly those involving potential hazards, plays a critical role in ensuring the safety of such systems.
+
+We then introduce Volkswagen Group and Cariad, the organizations hosting this project, and outline their contributions to advancing autonomous driving technology through the integration of AI and machine learning. Volkswagen's push towards automation, coupled with Cariad's role in developing software solutions, sets the stage for how this project aligns with their broader vision for the future of mobility.
+
+Next, we explore the underlying concepts of driving scenarios, with a specific focus on critical situations such as near collisions or unsafe driving conditions. These scenarios represent high-stakes events that autonomous vehicles must be equipped to handle reliably. We discuss the importance of identifying and analyzing these critical scenarios, both to enhance the robustness of autonomous systems and to better predict and simulate dangerous situations in a controlled environment.
+
+Following this, we provide an in-depth review of relevant literature on machine learning applications in scenario analysis, clustering, and trajectory generation. Emphasis is placed on how machine learning has been applied to extract meaningful patterns from driving data and generate realistic driving behaviors. We pay particular attention to works that focus on identifying critical scenarios and using generative models to create new ones for testing and validation purposes. In this context, we also discuss the role of transformers in trajectory generation, which have been pivotal to this project due to their ability to model sequential data and capture the dynamic interactions between vehicles.
+
+Lastly, we present our chosen methodologies for clustering driving scenarios and measuring criticality. We explain how these methods contribute to scenario analysis and why they were selected for this project. We also detail the tools and platforms employed throughout, including the use of transformers for generating vehicle trajectories, replacing the traditional reliance on frameworks such as Azure. This chapter provides a comprehensive background to understand the scope and significance of the work presented in subsequent chapters, laying the groundwork for deeper technical discussions ahead.
+
+\vspace{10em}
+\section{Background}
+
+In recent years, autonomous driving has emerged as one of the most transformative technologies in the automotive industry. By promising enhanced safety, reduced traffic congestion, and improved fuel efficiency, autonomous vehicles (AVs) are poised to revolutionize how we approach transportation. However, as the deployment of AVs grows, ensuring their safety in real-world conditions becomes critical. One of the main challenges is equipping autonomous systems with the ability to accurately perceive, understand, and react to a wide range of driving scenarios, including those that pose potential risks or hazards.
+
+The importance of handling critical driving scenarios cannot be overstated. These situations, such as near collisions or sudden lane changes by other vehicles, represent high-risk moments where the AV's decision-making process must be both quick and accurate. According to studies, more than 90\% of road accidents are caused by human error, which highlights the potential of autonomous systems to significantly reduce road traffic accidents if they can manage complex and unpredictable events. However, despite the advances in AV technologies, predicting and preparing for these rare but dangerous situations remains a significant challenge.
+
+In this context, scenario analysis and generation play a crucial role. By analyzing real-world driving data and clustering similar scenarios, we can identify patterns that highlight critical situations. This information helps improve the decision-making capabilities of autonomous driving systems by allowing them to train on a wider variety of events. Additionally, by generating new driving scenarios that replicate the conditions leading to critical situations, we can create a more comprehensive testing environment for AVs.
+
+The project presented here is situated at the intersection of advanced machine learning techniques and autonomous driving technology. It involves clustering driving scenarios, identifying critical situations, and using machine learning to generate new, realistic trajectories. By leveraging transformers for trajectory generation, this project aims to contribute to the development of more robust AV systems capable of handling complex driving conditions. The outcome of this work will help advance the safety and reliability of autonomous vehicles, pushing the boundaries of what these systems can achieve in real-world environments.
+
+
+\section{Hosting Organization}
+\subsection{Volkswagen Group}
+Volkswagen Group is one of the world's leading automotive manufacturers, headquartered in Wolfsburg, Germany. Founded in 1937, the company produces a wide range of vehicles, including passenger cars, commercial vehicles, and motorcycles, through its various well-known brands such as Volkswagen, Audi, Porsche, and Lamborghini.
+
+Volkswagen operates globally, employing over 670,000 people across more than 120 production plants worldwide. The company is a pioneer in automotive innovation and sustainability, investing heavily in electric mobility and autonomous driving technologies as part of its broader strategy to achieve carbon neutrality by 2050. With a strong commitment to shaping the future of mobility, Volkswagen Group continues to lead the transformation towards safer, more connected, and environmentally friendly vehicles.
+
+\begin{figure}[hbt!]
+  \centering
+  \includegraphics[width=8cm]{assets/vw-logo.png}
+  \caption{Volkswagen Logo.}
+  \label{fig:vue-snoc-pos}
+\end{figure}
+
+\subsection{Cariad}
+Cariad is a software and technology company within the Volkswagen Group, established in 2020 to accelerate the development of digital innovations for the automotive industry. Cariad focuses on creating a unified software platform that integrates advanced driver assistance systems, autonomous driving capabilities, and vehicle connectivity. By developing scalable, software-driven solutions, Cariad plays a key role in Volkswagen's vision for future mobility, including electric vehicles and digital ecosystems.
+
+With its expertise in AI, machine learning, and vehicle software, Cariad aims to transform Volkswagen from a traditional car manufacturer into a tech-driven company. The company employs a diverse team of engineers, developers, and data scientists working across Europe to advance software innovation and redefine the future of driving experiences.
+
+\begin{figure}[hbt!]
+  \centering
+  \includegraphics[width=8cm]{assets/cariad.png}
+  \caption{cariad Logo.}
+  \label{fig:vue-snoc-pos}
+\end{figure}
+
+\subsection{Team Structure and Roles}
+
+The project team is composed of a diverse group of professionals with expertise spanning engineering, AI, and software development, each contributing to the success of the project with their specialized skills.
+
+Dr. Christoph Lauer: A senior engineer and doctor at Cariad, Dr. Lauer brings extensive experience in autonomous driving and automotive engineering. His role is to oversee the technical aspects of the project, providing guidance on the application of advanced AI techniques in automotive systems. He ensures that the project aligns with Cariad’s broader objectives for developing innovative software solutions for autonomous driving.
+
+Shubham Phoolari: A PhD candidate specializing in Artificial Intelligence, Shubham focuses on the research and development of AI models within the project. His academic background allows him to explore cutting-edge AI techniques, particularly in the areas of scenario clustering and trajectory generation. He also supports the project by identifying relevant AI methodologies and ensuring their applicability to real-world driving scenarios.
+
+
+\section{Technical Background}
+\subsection{Autonomous Driving Technology}
+
+Autonomous driving technology leverages a combination of sensors, cameras, and machine learning algorithms to enable vehicles to perceive their environment and make decisions in real-time. These systems are typically classified into different levels of autonomy, from basic driver assistance (Level 1) to fully autonomous vehicles (Level 5), which require no human intervention.
+
+At the core of autonomous driving is the ability to sense and interpret the vehicle's surroundings. This involves detecting other vehicles, pedestrians, road signs, and obstacles. Sophisticated AI models are trained on vast amounts of driving data to understand and predict the behaviors of other road users, enabling the vehicle to respond appropriately in complex driving situations.
+
+\subsection{Driving Scenarios and Criticality}
+
+Driving scenarios refer to specific situations or sequences of events that a vehicle encounters on the road. These can range from everyday occurrences like merging into traffic, to more critical events such as emergency braking due to a sudden obstacle. In the context of autonomous driving, criticality refers to the level of risk or danger posed by a scenario. Scenarios with high criticality often involve situations where quick decision-making is crucial, such as avoiding a collision.
+
+For autonomous systems to operate safely, they must be able to both recognize and predict critical scenarios. Machine learning models are trained to analyze historical driving data, identify patterns, and assess the likelihood of critical situations occurring. These models also generate new, hypothetical scenarios to simulate how an AV would respond under various conditions, particularly in high-risk situations.
+
+
+\subsection{Machine Learning in Scenario Analysis}
+
+Machine learning plays a pivotal role in scenario analysis for autonomous driving. Through techniques like clustering, classification, and generative models. Machine learning algorithms can extract meaningful insights from large-scale driving data. Clustering is particularly useful for grouping similar scenarios together, enabling researchers and developers to categorize driving events based on common features such as speed, distance between vehicles, and the number of lane changes.
+
+In this project, transformer models are used for trajectory generation. Transformers, originally designed for natural language processing, have proven effective for sequential data modeling, making them suitable for predicting vehicle movements over time. By leveraging these models, the project can generate realistic vehicle trajectories, which are essential for simulating driving scenarios and testing the AV's responses to critical situations.
+
+\section{Problem Statement}
+
+Autonomous driving systems must be able to accurately detect, analyze, and respond to various driving scenarios in real time to ensure road safety. While significant progress has been made in interpreting and navigating typical driving situations, a critical challenge remains: identifying and managing high-risk or edge-case scenarios that involve potential collisions or sudden, unexpected changes in the driving environment. These scenarios are rare, but they represent the most dangerous and unpredictable moments an autonomous vehicle might encounter.
+
+Currently, the ability of AVs to predict and react to these critical scenarios is limited due to a lack of diverse and high-quality data representing such events. Furthermore, manually generating and testing these scenarios in real-world environments is costly and time-consuming, making it difficult to achieve comprehensive coverage. This gap in the system's ability to manage critical scenarios poses a significant barrier to ensuring the safety and reliability of AVs in complex driving conditions. Thus, there is an urgent need for automated, data-driven approaches to cluster and analyze driving data, identify critical scenarios, and generate new trajectories for testing AV systems in these high-risk situations. Addressing these challenges could drastically improve AV safety and performance, enabling more widespread and reliable deployment of autonomous vehicles.
+
+
+\section{Objective}
+
+The primary objective of this project is to develop a machine learning-based solution for clustering driving scenarios and identifying critical situations. By leveraging advanced machine learning techniques, including transformers for trajectory generation, the project aims to create a robust framework for analyzing driving data and generating new, critical scenarios that can be used to test and validate autonomous systems.
+
+This framework will focus on:
+
+\\ - Clustering driving data to detect patterns and identify scenarios that pose higher risks.
+\\ - Developing a criticality measure to assess and prioritize these scenarios for further analysis.
+\\ - Generating realistic new driving scenarios using data-driven methods, allowing autonomous driving systems to train on more comprehensive datasets.
+\\ - Testing and validating the effectiveness of the generated trajectories in improving AV decision-making in critical scenarios.
+\\ This approach is expected to enhance the robustness of AV technologies by improving their ability to handle complex, real-world driving conditions.
+
+\section{Literature Review}
+
+Autonomous driving has garnered extensive research interest over recent years, primarily due to its potential to enhance road safety and revolutionize transportation. A core challenge in autonomous driving systems is ensuring reliable performance across diverse driving scenarios, particularly in critical situations that involve potential risks or high-stakes interactions with other vehicles. This literature review covers key areas relevant to scenario-based testing in autonomous driving, criticality assessment, machine learning techniques for scenario analysis, and trajectory prediction.
+
+\subsection*{Scenario-Based Testing in Autonomous Driving}
+
+Scenario-based testing has emerged as a promising approach for validating autonomous driving systems by replicating real-world driving situations in a controlled environment. A significant body of work has explored methods for creating and analyzing driving scenarios to represent diverse road situations that ADS might encounter. A study by Koopman and Wagner (2016) highlighted the limitations of traditional safety testing approaches in the context of ADS, suggesting that scenario-based testing provides a more flexible and comprehensive way to capture the nuances of real-world driving. However, the sheer volume of possible scenarios makes it infeasible to test each one, underscoring the need for strategic scenario selection and generation methods that focus on relevance and criticality.
+
+
+\subsection*{Identifying Critical Scenarios in Driving}
+
+Critical scenarios, which often involve near-collisions or sudden, unexpected behavior from other road users, are essential for robust ADS development. Various studies have focused on identifying critical scenarios through data-driven approaches, including clustering, anomaly detection, and classification. For instance, research by Li et al. (2019) utilized clustering methods to categorize scenarios based on key features such as vehicle speed, distance, and relative position. Other works have implemented anomaly detection techniques like isolation forests (Liu et al., 2008) to identify rare, high-risk events within large datasets, providing insights into potential failure points within ADS. While these methods have advanced scenario identification, challenges remain in capturing the full spectrum of scenario diversity and assessing their criticality effectively.
+
+
+\subsection*{Machine Learning for Scenario Clustering and Analysis}
+
+Clustering algorithms play a pivotal role in organizing and categorizing scenarios, enabling ADS to prioritize scenario types most relevant to safety. Density-Based Spatial Clustering of Applications with Noise (DBSCAN) is frequently cited for its ability to group similar scenarios while distinguishing outliers, making it suitable for analyzing real-world driving data. A study by Ester et al. (1996) highlighted DBSCAN’s effectiveness in managing large datasets with noise, which is common in driving scenarios. Additionally, clustering techniques enable machine learning models to focus on a diverse but representative set of driving scenarios, streamlining scenario analysis and reducing redundancy in testing.
+
+
+\subsection*{Trajectory Prediction for Scenario Simulation}
+
+Trajectory prediction, particularly in multi-object scenarios, is crucial for simulating realistic driving behavior and anticipating potential hazards. Recent advances have leveraged deep learning models, such as transformers, for their ability to model complex sequential interactions between vehicles. Transformers have proven effective in predicting future positions based on past trajectories, as demonstrated in studies by Deo and Trivedi (2018), where the authors used these models to capture interdependencies among agents in a shared driving environment. This predictive capability enhances scenario generation by not only focusing on static or historical data but also by simulating future paths that could lead to critical situations, supporting more robust ADS training and testing.
+
+
+\subsection*{Limitations and Gaps in Current Research}
+
+While machine learning has contributed significantly to scenario identification and trajectory prediction, limitations persist. Current literature often relies on a limited set of criticality metrics, which may not fully capture the nuances of diverse driving scenarios. Additionally, many approaches depend on large-scale, labeled datasets, which can be costly and time-intensive to collect. Another challenge is effectively integrating trajectory prediction with scenario clustering to produce adaptive and context-specific scenarios, an area this project aims to address by leveraging transformers for dynamic interaction modeling.
+
+
+\section{Methodological Choice: CRISP-DM}
+
+The Cross-Industry Standard Process for Data Mining (CRISP-DM) is a widely adopted methodology that provides a structured approach to planning and executing analytical projects. First published in 1999 by a consortium of European companies, CRISP-DM has since become the de facto standard for developing data mining (\cite{crisp}).
+
+CRISP-DM divides the data mining process into six major phases (also illustrated in figure \ref{fig:crisp}): 
+
+\begin{enumerate}
+  \item Business Understanding
+  \item Data Understanding
+  \item Data Preparation
+  \item Modeling
+  \item Evaluation
+  \item Deployment
+\end{enumerate}
+
+\begin{figure}[hbt!]
+  \centering
+  \includegraphics[width=8cm]{figures/crisp.png}
+  \caption{CRISP-DM Methodology Diagram}
+  \caption*{\small Source: The CRISP-DM model: The new blueprint for data mining}
+  \label{fig:crisp}
+\end{figure}
+
+During this internship, the CRISP-DM methodology was adopted as a guiding framework to structure and develop our machine learning initiatives for autonomous driving scenario generation and analysis.
+
+In the following sections, we outline our approach to the Business Understanding phase, and in subsequent chapters, we delve into each step of the CRISP-DM methodology in detail.
+
+In the Business Understanding phase of this project, we conducted a series of collaborative workshops with domain experts in autonomous driving, safety engineering, and data science. These sessions aimed to bridge the gap between machine learning techniques and the specific demands of autonomous driving scenario analysis.
+
+Initially, we engaged with experts to gain insights into key challenges, particularly the importance of identifying and analyzing critical driving scenarios. We also presented an overview of machine learning concepts, including clustering, criticality assessment, and trajectory prediction, demonstrating their relevance to the project.
+
+Following the knowledge-sharing sessions, we applied structured brainstorming to identify use cases where machine learning could enhance scenario analysis. 
+
+\section{Tools \& Choice of Software}
+
+During this internship, a comprehensive suite of cutting-edge tools and technologies was leveraged to implement advanced data science solutions and machine learning models. The following tools and technologies played crucial roles in the project:
+
+
+\subsection*{Python}
+
+Python served as the primary programming language for data analysis, model development, and script writing. Python's extensive libraries and frameworks for data science and machine learning made it an ideal choice for this project. 
+
+
+\subsubsection*{Scikit-learn}
+This versatile machine learning library was employed to implement various algorithms and data preprocessing techniques. It provided a wide range of tools for model selection, evaluation, and feature engineering. 
+
+\subsubsection*{PyTorch}
+PyTorch was the primary deep learning framework used for developing complex neural network models, particularly in the trajectory prediction task. Known for its dynamic computation graph, PyTorch allowed for intuitive model development and real-time debugging, making it ideal for rapid experimentation. Its built-in support for GPU acceleration was essential in handling large datasets, reducing training time, and ensuring high-performance computations.
+    
+\subsubsection*{CUDA}
+CUDA was utilized to leverage the power of NVIDIA GPUs, significantly accelerating both training and inference phases for large-scale neural network models. CUDA allowed the project to optimize computational efficiency, particularly for deep learning tasks that involved high volumes of data and complex model architectures. By enabling parallel processing, CUDA contributed to reducing the time and resources required for extensive experimentation.
+
+\subsection*{Notebooks} 
+
+Notebooks were used for interactive development, data exploration, and result visualization. These notebooks facilitated collaborative work and easy sharing of code and insights among team members.
+
+\section*{Conclusion}
+
+This toolset, centered around Python and a variety of powerful libraries and frameworks, provided a comprehensive ecosystem for handling large datasets, developing machine learning models, and optimizing workflows. The integration of Scikit-learn, PyTorch, TensorFlow, and CUDA created a robust environment for machine learning in autonomous driving, enabling the team to efficiently explore data, develop and test models, and manage experiments. Moving forward, these tools will be foundational as we implement advanced scenario analysis and trajectory prediction models to enhance the safety and reliability of autonomous systems.
+
+
+
+\section{Project Overview}
+
+This project follows a structured approach to enhance the safety and robustness of autonomous driving systems by focusing on critical scenario analysis and trajectory generation.
+
+\begin{figure}[hbt!]
+  \centering
+  \includegraphics[width=12cm]{figures/images/overview.png}
+  \caption{Project Diagram}
+  \label{fig:vue-snoc-pos}
+\end{figure}
+\clearpage
+The key phases include:
+
+\subsection*{Data Collection and Processing:}
+
+Extensive driving data was collected from simulations, consisting of time series data on vehicle dynamics, object interactions, and road conditions. Data processing involved cleaning, normalization, and feature extraction to create a rich dataset, representing key aspects of autonomous driving scenarios. This stage ensured that the data was organized, accurate, and ready for scenario analysis.
+
+
+\subsubsection*{Clustering and Analysis:}
+
+To reduce the vast number of scenarios, clustering algorithms were applied to group similar scenarios based on key features, such as object positions, velocities, and interactions. DBSCAN, a density-based clustering technique, was employed to identify distinct types of driving scenarios while filtering out noise. This approach provided a structured way to categorize scenarios and focus on groups that are potentially hazardous or otherwise significant for system testing. 
+
+\subsubsection*{Critical Scenario Identification:}
+
+Within each cluster, criticality metrics were calculated to determine the level of risk or potential danger associated with each scenario. Scenarios with high criticality scores, such as those involving close-proximity maneuvers or near-collisions, were flagged for further analysis. This process prioritized scenarios that posed the greatest challenges to autonomous systems, refining the focus on safety-critical situations.
+    
+\subsubsection*{Trajectory Generation:}
+
+For each identified critical scenario, trajectory prediction models were developed to forecast the movements of objects within the scenario. This step involved predicting the paths of vehicles and other dynamic entities to understand potential outcomes and prepare the autonomous system for similar real-world situations. The generated trajectories were then validated to ensure they represented realistic and plausible driving behaviors, enabling robust testing of the autonomous system.
+ this is  the template
+
+\chapter{État de l'art}
+% Expand this section as needed; below is a concise starting point.
+\section{Retrieval‑Augmented Generation (RAG)}
+RAG combine les capacités de recherche documentaire (retrieval) avec celles des grands modèles de langage (generation) : les documents pertinents sont récupérés via une recherche vectorielle, puis le LLM produit une réponse en s'appuyant sur ces extraits, réduisant les hallucinations et permettant de citer des sources.
+
+\section{Stockage vectoriel et Qdrant}
+Les bases vectorielles (Qdrant, Milvus, Pinecone...) permettent de stocker des vecteurs d'embeddings et d'exécuter des recherches de similarité efficaces (approximate nearest neighbor). Qdrant est utilisé dans ce projet pour sa simplicité d'intégration et son mode de stockage persistant.
+
+\section{Embeddings et reranking}
+Les modèles de type Sentence‑Transformers produisent des embeddings efficaces pour la recherche sémantique. Les rerankers (Cross‑Encoder) permettent une réévaluation fine des premiers résultats pour améliorer la précision des extraits retenus.
+
+\section{LLMs multimodaux et orchestration agentique}
+L'intégration de capacités vision‑langage permet de traiter des images cliniques ; l'orchestration agentique (ex. ReAct, LangGraph) structure les appels d'outils et la logique de décision pour combiner retrieval, tools et génération.
+
+\chapter{Données et préparation}
+\section{Description du corpus}
+Le corpus principal est constitué de documents textuels et d'images cliniques, organisés dans le dossier \texttt{data/} du projet. Les fichiers importants sont \texttt{data/text\_with\_metadata.json} (texte source + métadonnées) et le dossier \texttt{data/chunks/} contenant les fragments prétraités. Les images et leurs légendes générées sont dans \texttt{data/images/} et \texttt{data/imagescaption/}.
+
+\section{Nettoyage et normalisation}
+Les étapes de prétraitement textuel incluent la normalisation Unicode, la suppression des caractères non pertinents, la tokenisation minimale et la conservation des métadonnées critiques (date, source, section). Un pipeline de validation signale les documents incomplets ou les métadonnées manquantes.
+
+\section{Chunking}
+Le texte est découpé en fragments (chunks) de taille contrôlée (ex. 200–400 tokens) avec recouvrement partiel pour préserver le contexte traversant les limites de fragment. Ce découpage facilite la recherche fine et limite le coût d'embedding.
+
+\section{Embeddings et reranking}
+Les embeddings sont générés avec \texttt{SentenceTransformer('all-MiniLM-L6-v2')} (embedding dense, dimension par défaut). Pour améliorer la précision, un reranker basé sur \texttt{CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')} est appliqué sur les premiers résultats de Qdrant afin de produire un top‑k réordonné.
+
+\section{Indexation et métadonnées}
+Chaque chunk est indexé dans Qdrant avec un payload contenant : \texttt{content}, \texttt{document\_id}, \texttt{page}, \texttt{section}, et autres métadonnées utiles pour le sourcing. Le schéma garantit la traçabilité de chaque extrait dans la réponse finale.
+
+\chapter{Architecture et implémentation}
+\section{Vue d'ensemble}
+Le pipeline implémente les étapes suivantes : ingestion → embeddings → indexation Qdrant → retrieval → reranking → agent (LLM + outils) → interface/API. L'architecture est conteneurisée (voir dossier \texttt{docker/} et \texttt{deploy/docker-compose.yml}) et prévoit un service Qdrant persistant.
+
+\section{Composants principaux}
+\begin{itemize}
+  \item \textbf{Ingestion :} scripts d'ingestion et de chunking (dossier \texttt{scripts/}) qui produisent les fichiers dans \texttt{data/chunks/}.
+  \item \textbf{Embeddings :} Sentence‑Transformers en mode batch pour efficacité.
+  \item \textbf{Index vectoriel :} Qdrant (collection \texttt{surgical\_collection\_multimodal}) stockant vecteurs et payloads.
+  \item \textbf{Reranker :} Cross‑Encoder pour réordonner les premiers résultats.
+  \item \textbf{Agent orchestré :} LangGraph construit un graphe agentique (nodes : \texttt{agent}, \texttt{tools}). Outils exposés : \texttt{vision\_tool} (analyse image via OpenRouter / modèle VL), \texttt{retriever\_tool}, \texttt{reranker\_tool}, \texttt{decomposer\_tool}.
+  \item \textbf{LLM :} ChatGroq / llama3 (via \texttt{langchain\_groq}) pour la génération finale et le raisonnement.
+  \item \textbf{Déploiement :} Dockerfiles pour web/worker, docker‑compose pour environnement de développement, stockage Qdrant en volume.
+\end{itemize}
+
+\section{Flux d'exécution d'une requête}
+Lorsqu'un utilisateur pose une question :
+\begin{enumerate}
+  \item Si une image est fournie, \texttt{vision\_tool} produit une description. 
+  \item Construction d'une requête fusionnée (texte + description image).
+  \item Récupération top‑N via Qdrant.
+  \item Optionnel : reranking via Cross‑Encoder.
+  \item Passage au LLM via LangGraph ; l'agent décide d'appeler d'autres outils si nécessaire (boucle ReAct).
+  \item Le LLM produit la réponse finale, accompagnée des sources (métadonnées des chunks).
+\end{enumerate}
+
+\section{Exemple d'API / format}
+Entrée (JSON) :
+\begin{verbatim}
+{
+  "query": "Quelle est la prise en charge recommandée pour une hernie inguinale?",
+  "image_path": null
+}
+\end{verbatim}
+
+Réponse attendue :
+\begin{verbatim}
+{
+  "answer": "... synthèse ...",
+  "sources": [
+    {"document_id": "doc_12", "page": 3, "snippet": "...", "score": 0.93}
+  ]
+}
+\end{verbatim}
+
+\chapter{Expérimentations et évaluation}
+\section{Objectifs expérimentaux}
+Les objectifs principaux sont : mesurer la pertinence des extraits récupérés (recall@k, MRR), évaluer l'impact du reranker sur la qualité retrieval, et analyser la qualité des réponses générées (évaluation humaine qualitative et métriques automatiques lorsque pertinent).
+
+\section{Protocole et métriques}
+Décrire ici la constitution d'un jeu de test, le découpage train/test si nécessaire, et les métriques retenues (recall@k, MRR, précision, évaluation humaine sur un échantillon annoté).
+
+\section{Analyse des résultats}
+Présenter tableaux et graphiques comparant différentes configurations (avec/sans reranker, différents modèles d'embeddings) et analyser les erreurs et hallucinations observées.
+
+\chapter{Déploiement et MLOps}
+\section{Conteneurisation et orchestration}
+Le projet inclut des Dockerfiles pour le service web et les workers (dossier \texttt{docker/}). Un fichier \texttt{deploy/docker-compose.yml} fournit une configuration de développement avec Qdrant et le service web.
+
+\section{Gestion des configurations et secrets}
+Les variables d'environnement sont exposées via des fichiers d'exemple (\texttt{env/.env.example}). En production, il est recommandé d'utiliser un gestionnaire de secrets (Vault, K8s secrets) et de limiter l'exposition des clés API.
+
+\section{Monitoring et réindexation}
+Proposer des outils de monitoring (Prometheus/Grafana) et une stratégie de réindexation (recompute embeddings, ingestion incrémentale) pour maintenir la qualité de l'index.
+
+\chapter{Discussion, limites et perspectives}
+Discuter des limitations (dépendance aux modèles externes, coûts, hallucinations, aspects éthiques) et proposer des voies d'amélioration : fine‑tuning, validation clinique, renforcement des garanties de confidentialité et conformité.
+
+\chapter{Conclusion}
+Ce mémoire présente une chaîne RAG multimodale appliquée au domaine médical, combinant indexation vectorielle (Qdrant), embeddings efficaces, reranking et orchestration agentique (LangGraph). Les résultats préliminaires montrent que l'association retrieval + reranker améliore la pertinence des informations sourcées. Des travaux futurs viseront la validation clinique, l'amélioration des modèles vision‑langue et le renforcement des garanties éthiques et de conformité.
+
+% Bibliography placeholder
+\clearpage
+\addcontentsline{toc}{chapter}{Bibliographie}
+\begin{thebibliography}{9}
+\bibitem{qdrant} Qdrant. \textit{Qdrant documentation}. \url{https://qdrant.tech/}
+\bibitem{sentence} Reimers, N., Gurevych, I. Sentence‑Transformers: Multilingual Sentence Embeddings using BERT. (2019).
+\bibitem{langgraph} LangGraph. \textit{LangGraph documentation}.
+\end{thebibliography}
+
+% Appendices
+\appendix
+\chapter{Annexes}
+\section{Extraits de code}
+Inclure ici les extraits de code importants (scripts d'ingestion, définition des tools, pipeline d'indexation).
+
+\section{Commandes pour reproduire}
+Compiler et exécuter le projet en local (exemples) :
+\begin{verbatim}
+# Depuis la racine du dépôt
+# 1) Démarrer Qdrant + web
+docker-compose -f saipro/deploy/docker-compose.yml up --build
+# 2) (optionnel) exécuter le script d'ingestion
+# ./scripts/data_ingestion.sh
+\end{verbatim}
+
+\end{document}

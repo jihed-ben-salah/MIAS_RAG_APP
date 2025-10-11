@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  web:
+    build:
+      context: ../../
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SETTINGS_MODULE=saipro_project.settings.dev
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:
+    driver: local
